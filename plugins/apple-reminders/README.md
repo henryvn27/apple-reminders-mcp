@@ -8,17 +8,24 @@ Reminders app.
 | Tool | Effect |
 | --- | --- |
 | `list_reminder_lists` | Read list names, IDs, and reminder counts |
-| `search_reminders` | Read reminders by text, exact list, and completion state |
+| `create_reminder_list` | Create one list in the default account |
+| `rename_reminder_list` | Rename one exact list by native ID |
+| `search_reminders` | Read and paginate reminders by text, list, completion, flag, and local due-date range |
 | `get_reminder` | Read one reminder by exact native ID |
 | `add_reminder` | Create one reminder |
-| `update_reminder` | Edit or move one exact reminder |
+| `update_reminder` | Edit, flag, or move one exact reminder |
 | `set_reminder_completed` | Complete or reopen one exact reminder |
 | `delete_reminder` | Permanently delete one exact reminder |
 
-Mutations use exact IDs returned by the read tools. There are no bulk-delete or
-list-delete actions. Empty notes clear notes. Existing due values can be changed
-within the same all-day or timed kind; cross-kind changes are rejected because
-Apple automation can leave stale date state.
+Reads include flags, alert time, creation/modification timestamps, completion
+metadata, notes, priority, due value, and list identity. Mutations use exact IDs
+returned by the read tools, and list IDs can target searches, adds, and moves.
+
+There are no bulk-delete or list-delete actions. Empty notes clear notes.
+Existing due values can be changed within the same all-day or timed kind;
+cross-kind changes and due clearing are not exposed because Apple automation
+can leave stale date state or reject the missing-date value. Timed due dates
+create the native alert; alert time is readable but not a separate writer.
 
 ## Verify
 

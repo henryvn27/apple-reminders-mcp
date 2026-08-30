@@ -2,25 +2,26 @@
 
 ## Boundary
 
-Apple Reminders MCP exposes three read tools and four mutation tools. Read tools
+Apple Reminders MCP exposes three read tools and six mutation tools. Read tools
 can list native list metadata and return reminder contents. Mutations create one
-reminder or target one exact native reminder ID returned by a read tool.
+reminder/list or target one exact native reminder/list ID returned by a read tool.
 
 The server does not expose bulk deletion or list deletion. The delete tool is
-marked destructive, add and delete are marked non-idempotent, and read tools are
+marked destructive, create actions and delete are marked non-idempotent, and read tools are
 marked read-only. These annotations let compatible MCP clients apply the right
 confirmation policy.
 
 The server invokes a fixed JXA file through `/usr/bin/osascript`. User input is
 serialized as JSON and passed as a separate process argument; it is not shell
 interpolated or executed as source code. Inputs reject unknown fields, null
-bytes, oversized strings, ambiguous list names, invalid dates, and mutations
-without an exact reminder ID.
+bytes, oversized strings, ambiguous list names, invalid dates, conflicting list
+selectors, and exact-target mutations without a native ID.
 
 ## Data access
 
-Read tools can return reminder titles, notes, due values, priorities, completion
-state, list names, and native IDs to the calling MCP client. Local Codex use
+Read tools can return reminder titles, notes, due and alert values, flags,
+priorities, creation/modification timestamps, completion state, list names, and
+native IDs to the calling MCP client. Local Codex use
 requires no API key and sends nothing to this project. When using a remote MCP
 tunnel, the tunnel provider and calling client are part of your data boundary.
 

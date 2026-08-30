@@ -1,6 +1,6 @@
 {
   "name": "apple-reminders",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Read and manage native Apple Reminders from Codex or ChatGPT",
   "author": {
     "name": "Henry Van Ness"
@@ -18,7 +18,7 @@
   "interface": {
     "displayName": "Apple Reminders",
     "shortDescription": "Tell your AI. It’s on your list.",
-    "longDescription": "Apple Reminders lets Codex and ChatGPT list, search, read, create, update, complete, reopen, and delete native reminders on this Mac. Mutations target one exact reminder ID, and bulk destructive actions are not exposed.",
+    "longDescription": "Apple Reminders lets Codex and ChatGPT create and rename lists, search and page through existing reminders, and safely create, update, move, flag, complete, reopen, or delete one reminder on this Mac. Exact native IDs avoid ambiguous targets, and bulk destructive actions are not exposed.",
     "developerName": "Henry Van Ness",
     "category": "Productivity",
     "capabilities": [
@@ -27,6 +27,7 @@
     ],
     "defaultPrompt": [
       "What reminders are still open for school?",
+      "Show my flagged reminders due this week.",
       "Remind me to submit my assignment tomorrow at 4 PM.",
       "Mark my submit assignment reminder complete."
     ],

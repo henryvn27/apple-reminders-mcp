@@ -22,6 +22,9 @@ AI: You have 3 open reminders in School.
 
 You: Move “submit the form” to Personal and mark it high priority.
 AI: Updated “Submit the form”.
+
+You: Show flagged reminders due this week, then make a new “Competition” list.
+AI: Found 2 flagged reminders. Created reminder list “Competition”.
 ```
 
 Read it. Add it. Change it. Finish it. No cloud database, replacement task app,
@@ -38,6 +41,8 @@ Start a new Codex task after installation, then ask naturally:
 
 ```text
 What reminders are due in my School list?
+Show my flagged reminders due this week.
+Create a Competition list and move “pack goggles” there.
 Remind me next Friday at 3 PM to send the Scoutly build.
 Change my “send the build” reminder to high priority.
 Mark “bring goggles” complete.
@@ -53,12 +58,18 @@ Choose **Allow**. The permission and your reminder data stay on your Mac.
 | Tool | What it does | Safety |
 | --- | --- | --- |
 | `list_reminder_lists` | Lists native lists, IDs, and counts | Read-only |
-| `search_reminders` | Searches titles and notes; filters by list and completion | Read-only |
+| `create_reminder_list` | Creates one list in the default account | One list |
+| `rename_reminder_list` | Renames one list | Exact list ID |
+| `search_reminders` | Searches text; filters by list ID/name, completion, flag, and local due-date range; paginates | Read-only |
 | `get_reminder` | Reads one reminder by exact native ID | Read-only |
 | `add_reminder` | Creates one reminder | One item |
-| `update_reminder` | Edits title, notes, due value, priority, or list | Exact ID |
+| `update_reminder` | Edits title, notes, due value, priority, flag, or list | Exact reminder ID |
 | `set_reminder_completed` | Completes or reopens one reminder | Exact ID |
 | `delete_reminder` | Permanently deletes one reminder | Exact ID; destructive |
+
+Reads include flags, native alert time, creation/modification timestamps,
+completion metadata, notes, priority, due value, and list identity. Returned
+list IDs can target searches, adds, and moves even when list names collide.
 
 The plugin exposes no bulk delete and no list delete. Compatible MCP clients
 receive accurate read-only, idempotent, and destructive annotations.
@@ -66,13 +77,16 @@ receive accurate read-only, idempotent, and destructive annotations.
 Dates support all-day `YYYY-MM-DD` values and timed ISO 8601 values with an
 explicit UTC offset. An existing due value can change within the same all-day
 or timed kind. Cross-kind changes are rejected because the native scripting
-interface can leave stale date state.
+interface can leave stale date state. A timed due date creates the native alert;
+Apple automation couples the alert and due time, so alert time is readable but
+not exposed as a separate writer. Due clearing is omitted because the native
+bridge rejects the missing-date value.
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    A[Codex or ChatGPT] --> B[7 focused MCP tools]
+    A[Codex or ChatGPT] --> B[9 focused MCP tools]
     B --> C[Strict Python validation]
     C -->|fixed argv JSON| D[macOS automation]
     D --> E[Apple Reminders]
