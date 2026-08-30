@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dependency-free MCP server for creating native Apple Reminders."""
+"""Dependency-free MCP server for native Apple Reminders."""
 
 import datetime as dt
 import json
@@ -9,75 +9,216 @@ from pathlib import Path
 
 
 PROTOCOL_VERSION = "2025-06-18"
-SERVER_VERSION = "0.1.0"
-TOOL_NAME = "add_reminder"
+SERVER_VERSION = "0.2.0"
 BRIDGE = Path(__file__).with_name("reminders.js")
-ALLOWED_ARGUMENTS = {"title", "due", "list", "notes", "priority"}
 PRIORITIES = {"none": 0, "high": 1, "medium": 5, "low": 9}
 
-TOOL = {
-    "name": TOOL_NAME,
-    "title": "Add Apple Reminder",
-    "description": (
-        "Create one reminder in the native Apple Reminders app on this Mac. "
-        "Resolve relative dates before calling. Use YYYY-MM-DD for an all-day "
-        "reminder or an ISO 8601 date-time with an explicit UTC offset."
-    ),
-    "inputSchema": {
-        "type": "object",
-        "properties": {
-            "title": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 512,
-                "description": "Reminder title.",
-            },
-            "due": {
-                "type": "string",
-                "description": (
-                    "Optional due value. Use YYYY-MM-DD for all day, or an ISO "
-                    "8601 date-time with an explicit offset, such as "
-                    "2026-09-01T16:00:00-04:00."
-                ),
-            },
-            "list": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256,
-                "description": (
-                    "Optional exact Reminders list name. The default list is used "
-                    "when omitted. Duplicate list names are rejected."
-                ),
-            },
-            "notes": {
-                "type": "string",
-                "maxLength": 4096,
-                "description": "Optional reminder notes.",
-            },
-            "priority": {
-                "type": "string",
-                "enum": ["none", "low", "medium", "high"],
-                "default": "none",
-            },
-        },
-        "required": ["title"],
-        "additionalProperties": False,
-    },
-    "annotations": {
-        "title": "Add Apple Reminder",
-        "readOnlyHint": False,
-        "destructiveHint": False,
-        "idempotentHint": False,
+
+def _annotations(title, *, read_only, destructive=False, idempotent=True):
+    return {
+        "title": title,
+        "readOnlyHint": read_only,
+        "destructiveHint": destructive,
+        "idempotentHint": idempotent,
         "openWorldHint": False,
-    },
+    }
+
+
+DUE_SCHEMA = {
+    "type": "string",
+    "description": (
+        "Use YYYY-MM-DD for an all-day due date, or an ISO 8601 date-time "
+        "with an explicit UTC offset, such as 2026-09-01T16:00:00-04:00."
+    ),
 }
+ID_SCHEMA = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 1024,
+    "description": "Exact native reminder ID returned by a read tool.",
+}
+LIST_SCHEMA = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 256,
+    "description": "Exact Reminders list name. Duplicate names are rejected.",
+}
+PRIORITY_SCHEMA = {
+    "type": "string",
+    "enum": ["none", "low", "medium", "high"],
+}
+
+TOOLS = [
+    {
+        "name": "list_reminder_lists",
+        "title": "List Apple Reminder Lists",
+        "description": "List native Reminders lists with their IDs and reminder counts.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        "annotations": _annotations("List Apple Reminder Lists", read_only=True),
+    },
+    {
+        "name": "search_reminders",
+        "title": "Search Apple Reminders",
+        "description": (
+            "Read existing reminders. Optionally search titles and notes, limit "
+            "the search to an exact list, and include open, completed, or all items."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "maxLength": 512,
+                    "description": "Optional case-insensitive text in the title or notes.",
+                },
+                "list": LIST_SCHEMA,
+                "completed": {
+                    "type": "string",
+                    "enum": ["open", "completed", "all"],
+                    "default": "open",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "default": 50,
+                },
+            },
+            "additionalProperties": False,
+        },
+        "annotations": _annotations("Search Apple Reminders", read_only=True),
+    },
+    {
+        "name": "get_reminder",
+        "title": "Get Apple Reminder",
+        "description": "Read one native reminder by its exact ID.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": ID_SCHEMA},
+            "required": ["id"],
+            "additionalProperties": False,
+        },
+        "annotations": _annotations("Get Apple Reminder", read_only=True),
+    },
+    {
+        "name": "add_reminder",
+        "title": "Add Apple Reminder",
+        "description": (
+            "Create one reminder in the native Apple Reminders app. Resolve "
+            "relative dates before calling."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "description": "Reminder title.",
+                },
+                "due": DUE_SCHEMA,
+                "list": LIST_SCHEMA,
+                "notes": {
+                    "type": "string",
+                    "maxLength": 4096,
+                    "description": "Optional reminder notes.",
+                },
+                "priority": {**PRIORITY_SCHEMA, "default": "none"},
+            },
+            "required": ["title"],
+            "additionalProperties": False,
+        },
+        "annotations": _annotations(
+            "Add Apple Reminder", read_only=False, idempotent=False
+        ),
+    },
+    {
+        "name": "update_reminder",
+        "title": "Update Apple Reminder",
+        "description": (
+            "Update one reminder by exact ID. Supports title, notes, priority, "
+            "due value, and moving it to an existing list. Empty notes clear them. "
+            "Switching an existing due value between all-day and timed is rejected "
+            "because Apple automation cannot do it without leaving stale date state."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": ID_SCHEMA,
+                "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                },
+                "due": DUE_SCHEMA,
+                "list": LIST_SCHEMA,
+                "notes": {"type": "string", "maxLength": 4096},
+                "priority": PRIORITY_SCHEMA,
+            },
+            "required": ["id"],
+            "additionalProperties": False,
+        },
+        "annotations": _annotations("Update Apple Reminder", read_only=False),
+    },
+    {
+        "name": "set_reminder_completed",
+        "title": "Complete or Reopen Apple Reminder",
+        "description": "Complete or reopen one reminder by its exact ID.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "id": ID_SCHEMA,
+                "completed": {"type": "boolean"},
+            },
+            "required": ["id", "completed"],
+            "additionalProperties": False,
+        },
+        "annotations": _annotations(
+            "Complete or Reopen Apple Reminder", read_only=False
+        ),
+    },
+    {
+        "name": "delete_reminder",
+        "title": "Delete Apple Reminder",
+        "description": "Permanently delete one reminder by its exact ID.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": ID_SCHEMA},
+            "required": ["id"],
+            "additionalProperties": False,
+        },
+        "annotations": _annotations(
+            "Delete Apple Reminder",
+            read_only=False,
+            destructive=True,
+            idempotent=False,
+        ),
+    },
+]
+TOOL_NAMES = {tool["name"] for tool in TOOLS}
 
 
 class UserError(Exception):
     pass
 
 
-def _text(value, field, maximum, required=False):
+def _arguments(arguments, allowed):
+    if not isinstance(arguments, dict):
+        raise UserError("arguments must be an object")
+    unknown = sorted(set(arguments) - allowed)
+    if unknown:
+        raise UserError(
+            "unknown argument%s: %s"
+            % ("" if len(unknown) == 1 else "s", ", ".join(unknown))
+        )
+    return arguments
+
+
+def _text(value, field, maximum, *, required=False, allow_empty=False):
     if value is None and not required:
         return None
     if not isinstance(value, str):
@@ -89,51 +230,116 @@ def _text(value, field, maximum, required=False):
         raise UserError("%s cannot contain a null byte" % field)
     if len(value) > maximum:
         raise UserError("%s must be at most %d characters" % (field, maximum))
-    return value or None
+    return value if value or allow_empty else None
 
 
-def normalize_arguments(arguments):
-    if not isinstance(arguments, dict):
-        raise UserError("arguments must be an object")
-    unknown = sorted(set(arguments) - ALLOWED_ARGUMENTS)
-    if unknown:
-        raise UserError("unknown argument%s: %s" % (
-            "" if len(unknown) == 1 else "s", ", ".join(unknown)
-        ))
+def _due(value):
+    value = _text(value, "due", 64, required=True)
+    if len(value) == 10:
+        try:
+            return dt.date.fromisoformat(value).isoformat(), "all_day"
+        except ValueError:
+            raise UserError("due must be a real date in YYYY-MM-DD format")
+    try:
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise UserError("due must be an ISO 8601 date-time")
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise UserError("timed due values must include an explicit UTC offset")
+    return parsed.isoformat(timespec="seconds"), "timed"
 
-    priority = arguments.get("priority", "none")
-    if not isinstance(priority, str) or priority not in PRIORITIES:
+
+def _priority(value, default=None):
+    if value is None and default is not None:
+        value = default
+    if not isinstance(value, str) or value not in PRIORITIES:
         raise UserError("priority must be one of: none, low, medium, high")
+    return PRIORITIES[value], value
 
-    due = arguments.get("due")
-    due_kind = None
-    if due is not None:
-        due = _text(due, "due", 64, required=True)
-        if len(due) == 10:
-            try:
-                due = dt.date.fromisoformat(due).isoformat()
-            except ValueError:
-                raise UserError("due must be a real date in YYYY-MM-DD format")
-            due_kind = "all_day"
-        else:
-            try:
-                parsed = dt.datetime.fromisoformat(due.replace("Z", "+00:00"))
-            except ValueError:
-                raise UserError("due must be an ISO 8601 date-time")
-            if parsed.tzinfo is None or parsed.utcoffset() is None:
-                raise UserError("timed due values must include an explicit UTC offset")
-            due = parsed.isoformat(timespec="seconds")
-            due_kind = "timed"
 
-    return {
-        "title": _text(arguments.get("title"), "title", 512, required=True),
-        "due": due,
-        "due_kind": due_kind,
-        "list": _text(arguments.get("list"), "list", 256),
-        "notes": _text(arguments.get("notes"), "notes", 4096),
-        "priority": PRIORITIES[priority],
-        "priority_label": priority,
-    }
+def _id(arguments):
+    return _text(arguments.get("id"), "id", 1024, required=True)
+
+
+def normalize_arguments(name, arguments):
+    if name == "list_reminder_lists":
+        _arguments(arguments, set())
+        return {"action": name}
+
+    if name == "search_reminders":
+        arguments = _arguments(arguments, {"query", "list", "completed", "limit"})
+        completed = arguments.get("completed", "open")
+        if completed not in {"open", "completed", "all"}:
+            raise UserError("completed must be one of: open, completed, all")
+        limit = arguments.get("limit", 50)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            raise UserError("limit must be an integer from 1 to 200")
+        return {
+            "action": name,
+            "query": _text(arguments.get("query"), "query", 512),
+            "list": _text(arguments.get("list"), "list", 256),
+            "completed": completed,
+            "limit": limit,
+        }
+
+    if name in {"get_reminder", "delete_reminder"}:
+        arguments = _arguments(arguments, {"id"})
+        return {"action": name, "id": _id(arguments)}
+
+    if name == "add_reminder":
+        arguments = _arguments(
+            arguments, {"title", "due", "list", "notes", "priority"}
+        )
+        priority, priority_label = _priority(arguments.get("priority"), "none")
+        due = due_kind = None
+        if "due" in arguments:
+            due, due_kind = _due(arguments["due"])
+        return {
+            "action": name,
+            "title": _text(arguments.get("title"), "title", 512, required=True),
+            "due": due,
+            "due_kind": due_kind,
+            "list": _text(arguments.get("list"), "list", 256),
+            "notes": _text(arguments.get("notes"), "notes", 4096),
+            "priority": priority,
+            "priority_label": priority_label,
+        }
+
+    if name == "update_reminder":
+        arguments = _arguments(
+            arguments, {"id", "title", "due", "list", "notes", "priority"}
+        )
+        payload = {"action": name, "id": _id(arguments)}
+        if "title" in arguments:
+            payload["title"] = _text(
+                arguments["title"], "title", 512, required=True
+            )
+        if "notes" in arguments:
+            payload["notes"] = _text(
+                arguments["notes"], "notes", 4096, allow_empty=True
+            )
+        if "list" in arguments:
+            payload["list"] = _text(
+                arguments["list"], "list", 256, required=True
+            )
+        if "priority" in arguments:
+            payload["priority"], payload["priority_label"] = _priority(
+                arguments["priority"]
+            )
+        if "due" in arguments:
+            payload["due"], payload["due_kind"] = _due(arguments["due"])
+        if len(payload) == 2:
+            raise UserError("update_reminder requires at least one field to change")
+        return payload
+
+    if name == "set_reminder_completed":
+        arguments = _arguments(arguments, {"id", "completed"})
+        completed = arguments.get("completed")
+        if not isinstance(completed, bool):
+            raise UserError("completed must be a boolean")
+        return {"action": name, "id": _id(arguments), "completed": completed}
+
+    raise UserError("unknown tool")
 
 
 def invoke_reminders(payload):
@@ -148,11 +354,11 @@ def invoke_reminders(payload):
             ],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=120,
             check=False,
         )
     except subprocess.TimeoutExpired:
-        raise UserError("Apple Reminders did not respond within 30 seconds")
+        raise UserError("Apple Reminders did not respond within 120 seconds")
     except OSError as error:
         raise UserError("could not launch Apple Reminders automation: %s" % error)
 
@@ -165,8 +371,8 @@ def invoke_reminders(payload):
         result = json.loads(completed.stdout)
     except json.JSONDecodeError:
         raise UserError("Apple Reminders returned an unreadable response")
-    if not isinstance(result, dict) or not result.get("id"):
-        raise UserError("Apple Reminders did not confirm the created reminder")
+    if not isinstance(result, dict):
+        raise UserError("Apple Reminders returned an invalid response")
     return result
 
 
@@ -180,18 +386,46 @@ def _tool_result(text, structured=None, is_error=False):
 
 
 def call_tool(params):
-    if not isinstance(params, dict) or params.get("name") != TOOL_NAME:
+    if not isinstance(params, dict) or params.get("name") not in TOOL_NAMES:
         raise UserError("unknown tool")
+    name = params["name"]
     try:
-        payload = normalize_arguments(params.get("arguments", {}))
-        created = invoke_reminders(payload)
+        payload = normalize_arguments(name, params.get("arguments", {}))
+        result = invoke_reminders(payload)
     except UserError as error:
         return _tool_result(str(error), is_error=True)
 
-    message = 'Added “%s” to the “%s” Reminders list.' % (
-        created["title"], created["list"]
-    )
-    return _tool_result(message, created)
+    if name == "list_reminder_lists":
+        message = "Found %d reminder lists." % len(result.get("lists", []))
+    elif name == "search_reminders":
+        message = "Found %d matching reminders." % len(result.get("reminders", []))
+    elif name == "get_reminder":
+        reminder = result.get("reminder", {})
+        state = "completed" if reminder.get("completed") else "open"
+        message = '“%s” is %s in “%s”.' % (
+            reminder.get("title", "Reminder"),
+            state,
+            reminder.get("list", "Reminders"),
+        )
+    elif name == "add_reminder":
+        reminder = result.get("reminder", {})
+        message = 'Added “%s” to “%s”.' % (
+            reminder.get("title", "Reminder"),
+            reminder.get("list", "Reminders"),
+        )
+    elif name == "update_reminder":
+        message = 'Updated “%s”.' % result.get("reminder", {}).get(
+            "title", "reminder"
+        )
+    elif name == "set_reminder_completed":
+        reminder = result.get("reminder", {})
+        verb = "Completed" if reminder.get("completed") else "Reopened"
+        message = '%s “%s”.' % (verb, reminder.get("title", "reminder"))
+    else:
+        message = 'Deleted “%s”.' % result.get("deleted", {}).get(
+            "title", "reminder"
+        )
+    return _tool_result(message, result)
 
 
 def _response(message_id, result):
@@ -216,16 +450,25 @@ def handle_message(message):
         return None
 
     if method == "initialize":
-        return _response(message_id, {
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "apple-reminders", "version": SERVER_VERSION},
-            "instructions": "Creates reminders only. It cannot read, complete, or delete them.",
-        })
+        return _response(
+            message_id,
+            {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {"tools": {"listChanged": False}},
+                "serverInfo": {
+                    "name": "apple-reminders",
+                    "version": SERVER_VERSION,
+                },
+                "instructions": (
+                    "Reads and manages native Apple Reminders. Use read tools to "
+                    "resolve exact IDs before updating, completing, reopening, or deleting."
+                ),
+            },
+        )
     if method == "ping":
         return _response(message_id, {})
     if method == "tools/list":
-        return _response(message_id, {"tools": [TOOL]})
+        return _response(message_id, {"tools": TOOLS})
     if method == "tools/call":
         try:
             return _response(message_id, call_tool(message.get("params")))
@@ -245,7 +488,10 @@ def main():
             print("apple-reminders server error: %s" % error, file=sys.stderr)
             response = _error(None, -32603, "Internal error")
         if response is not None:
-            print(json.dumps(response, ensure_ascii=False, separators=(",", ":")), flush=True)
+            print(
+                json.dumps(response, ensure_ascii=False, separators=(",", ":")),
+                flush=True,
+            )
 
 
 if __name__ == "__main__":
