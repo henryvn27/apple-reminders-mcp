@@ -13,70 +13,87 @@
   <img src="https://img.shields.io/badge/dependencies-0-f4eee3.svg" alt="Zero dependencies">
 </p>
 
-A tiny, local-first MCP plugin that gives Codex or ChatGPT one carefully scoped
-power: create a reminder in the native macOS Reminders app.
+A tiny, local-first MCP plugin that lets Codex or ChatGPT work with the
+Reminders app already on your Mac.
 
-~~~text
-You: Remind me to submit the form tomorrow at 4 PM.
-AI: Added “Submit the form” to the “Reminders” list.
-~~~
+```text
+You: What school reminders are still open?
+AI: You have 3 open reminders in School.
 
-No cloud database. No new task app. No dependency install.
+You: Move “submit the form” to Personal and mark it high priority.
+AI: Updated “Submit the form”.
+```
+
+Read it. Add it. Change it. Finish it. No cloud database, replacement task app,
+or dependency install.
 
 ## Install in Codex
 
-~~~bash
+```bash
 codex plugin marketplace add henryvn27/apple-reminders-mcp
 codex plugin add apple-reminders@apple-reminders-mcp
-~~~
+```
 
 Start a new Codex task after installation, then ask naturally:
 
-~~~text
+```text
+What reminders are due in my School list?
 Remind me next Friday at 3 PM to send the Scoutly build.
-Add “bring goggles” to my School list with high priority.
-Remind me on September 12 to renew the domain. Note: check the card first.
-~~~
+Change my “send the build” reminder to high priority.
+Mark “bring goggles” complete.
+Reopen the goggles reminder.
+Delete the old domain-renewal reminder.
+```
 
-macOS may ask whether Codex or Python can control Reminders on the first write.
+macOS may ask whether Codex or Python can control Reminders on first use.
 Choose **Allow**. The permission and your reminder data stay on your Mac.
 
 ## What it can do
 
-| Input | Support |
-| --- | --- |
-| Title | Required |
-| Due date | All-day <code>YYYY-MM-DD</code> |
-| Due time | ISO 8601 with an explicit UTC offset |
-| List | Exact Reminders list name |
-| Notes | Up to 4,096 characters |
-| Priority | None, low, medium, or high |
+| Tool | What it does | Safety |
+| --- | --- | --- |
+| `list_reminder_lists` | Lists native lists, IDs, and counts | Read-only |
+| `search_reminders` | Searches titles and notes; filters by list and completion | Read-only |
+| `get_reminder` | Reads one reminder by exact native ID | Read-only |
+| `add_reminder` | Creates one reminder | One item |
+| `update_reminder` | Edits title, notes, due value, priority, or list | Exact ID |
+| `set_reminder_completed` | Completes or reopens one reminder | Exact ID |
+| `delete_reminder` | Permanently deletes one reminder | Exact ID; destructive |
 
-It intentionally cannot read, complete, edit, or delete reminders. One tool,
-one direction, easy to trust.
+The plugin exposes no bulk delete and no list delete. Compatible MCP clients
+receive accurate read-only, idempotent, and destructive annotations.
+
+Dates support all-day `YYYY-MM-DD` values and timed ISO 8601 values with an
+explicit UTC offset. An existing due value can change within the same all-day
+or timed kind. Cross-kind changes are rejected because the native scripting
+interface can leave stale date state.
 
 ## How it works
 
-~~~mermaid
+```mermaid
 flowchart LR
-    A[Codex or ChatGPT] -->|add_reminder| B[MCP server]
+    A[Codex or ChatGPT] --> B[7 focused MCP tools]
     B --> C[Strict Python validation]
     C -->|fixed argv JSON| D[macOS automation]
     D --> E[Apple Reminders]
-~~~
+    E -->|native IDs + structured data| A
+```
 
-The MCP server uses Python's standard library and invokes a fixed JavaScript
-for Automation bridge. User content is passed as JSON in a separate process
-argument—never interpolated into shell code.
+The MCP server uses only Python's standard library and a fixed JavaScript for
+Automation bridge. User content is serialized as JSON in a separate process
+argument—never interpolated into shell commands or executable source.
+
+Exact-item actions use Reminders' direct `byId(...)` specifier rather than
+enumerating the full reminder library.
 
 ## ChatGPT
 
 ChatGPT cannot call a local stdio MCP process directly. OpenAI's
 [Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
-can expose this same server through an outbound-only connection when your plan
-and workspace support developer-mode write actions.
+can expose this server through an outbound-only connection when your plan and
+workspace support developer-mode MCP actions.
 
-~~~bash
+```bash
 export CONTROL_PLANE_API_KEY="<runtime API key>"
 tunnel-client init \
   --sample sample_mcp_stdio_local \
@@ -85,7 +102,7 @@ tunnel-client init \
   --mcp-command "/usr/bin/python3 /absolute/path/to/apple-reminders-mcp/plugins/apple-reminders/server.py"
 tunnel-client doctor --profile apple-reminders --explain
 tunnel-client run --profile apple-reminders
-~~~
+```
 
 Never commit the runtime API key or tunnel profile. See OpenAI's
 [current full-MCP availability](https://help.openai.com/en/articles/12584461-developer-mode-and-full-mcp-connectors-in-chatgpt)
@@ -93,23 +110,21 @@ before setup.
 
 ## Develop
 
-~~~bash
+```bash
 cd plugins/apple-reminders
 /usr/bin/python3 -m unittest discover -s tests -v
-printf '%s\n' \
-  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
-  '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-  | /usr/bin/python3 server.py
-~~~
+python3 -m py_compile server.py
+osacompile -l JavaScript -o /tmp/apple-reminders.scpt reminders.js
+```
 
-Tests never write to Reminders. Live writes only happen through
-<code>tools/call</code>.
+Automated tests never access Reminders. Live mutations happen only through
+`tools/call`.
 
 ## Security
 
 Please report vulnerabilities through
 [GitHub private vulnerability reporting](https://github.com/henryvn27/apple-reminders-mcp/security/advisories/new).
-The full security boundary is documented in [SECURITY.md](SECURITY.md).
+The full boundary is documented in [SECURITY.md](SECURITY.md).
 
 ## License
 
