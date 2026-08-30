@@ -37,6 +37,27 @@ codex plugin marketplace add henryvn27/apple-reminders-mcp
 codex plugin add apple-reminders@apple-reminders-mcp
 ```
 
+### Let an agent install it
+
+Paste this into a Codex task:
+
+```text
+Install the Apple Reminders plugin from
+https://github.com/henryvn27/apple-reminders-mcp on this Mac.
+
+First inspect the configured plugin marketplaces and installed plugins. If an
+Apple Reminders plugin is already enabled from another marketplace, stop and
+explain the conflict. Do not install a duplicate or remove existing config.
+
+Otherwise, run:
+codex plugin marketplace add henryvn27/apple-reminders-mcp
+codex plugin add apple-reminders@apple-reminders-mcp
+
+Verify that apple-reminders@apple-reminders-mcp is installed and enabled. Then
+tell me to start a new Codex task so the plugin loads. Remind me to choose Allow
+if macOS asks whether Codex or Python can control Reminders.
+```
+
 Start a new Codex task after installation, then ask naturally:
 
 ```text
