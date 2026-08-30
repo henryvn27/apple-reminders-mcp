@@ -1,0 +1,34 @@
+{
+  "name": "apple-reminders",
+  "version": "0.1.0",
+  "description": "Add reminders to the native Apple Reminders app from Codex or ChatGPT",
+  "author": {
+    "name": "Henry Van Ness"
+  },
+  "license": "MIT",
+  "keywords": [
+    "apple reminders",
+    "mcp",
+    "codex",
+    "chatgpt",
+    "macos",
+    "productivity"
+  ],
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Apple Reminders",
+    "shortDescription": "Tell your AI. It’s on your list.",
+    "longDescription": "Apple Reminders gives Codex and ChatGPT one focused write action for creating native reminders on this Mac. Titles, dates, notes, lists, and priority are validated before Reminders is changed.",
+    "developerName": "Henry Van Ness",
+    "category": "Productivity",
+    "capabilities": [
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Remind me to submit my assignment tomorrow at 4 PM.",
+      "Add bring goggles to my School list.",
+      "Remind me next Friday to follow up."
+    ],
+    "brandColor": "#F5B700"
+  }
+}
