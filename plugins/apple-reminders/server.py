@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 PROTOCOL_VERSION = "2025-06-18"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 BRIDGE = Path(__file__).with_name("reminders.js")
 PRIORITIES = {"none": 0, "high": 1, "medium": 5, "low": 9}
 
@@ -31,6 +31,11 @@ DUE_SCHEMA = {
         "with an explicit UTC offset, such as 2026-09-01T16:00:00-04:00."
     ),
 }
+LOCAL_DATE_SCHEMA = {
+    "type": "string",
+    "pattern": r"^\d{4}-\d{2}-\d{2}$",
+    "description": "Local calendar date in YYYY-MM-DD format, inclusive.",
+}
 ID_SCHEMA = {
     "type": "string",
     "minLength": 1,
@@ -42,6 +47,12 @@ LIST_SCHEMA = {
     "minLength": 1,
     "maxLength": 256,
     "description": "Exact Reminders list name. Duplicate names are rejected.",
+}
+LIST_ID_SCHEMA = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 1024,
+    "description": "Exact native list ID returned by list_reminder_lists.",
 }
 PRIORITY_SCHEMA = {
     "type": "string",
@@ -61,11 +72,38 @@ TOOLS = [
         "annotations": _annotations("List Apple Reminder Lists", read_only=True),
     },
     {
+        "name": "create_reminder_list",
+        "title": "Create Apple Reminder List",
+        "description": "Create one list in the default Reminders account.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"name": LIST_SCHEMA},
+            "required": ["name"],
+            "additionalProperties": False,
+        },
+        "annotations": _annotations(
+            "Create Apple Reminder List", read_only=False, idempotent=False
+        ),
+    },
+    {
+        "name": "rename_reminder_list",
+        "title": "Rename Apple Reminder List",
+        "description": "Rename one list by its exact native list ID.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"id": LIST_ID_SCHEMA, "name": LIST_SCHEMA},
+            "required": ["id", "name"],
+            "additionalProperties": False,
+        },
+        "annotations": _annotations("Rename Apple Reminder List", read_only=False),
+    },
+    {
         "name": "search_reminders",
         "title": "Search Apple Reminders",
         "description": (
             "Read existing reminders. Optionally search titles and notes, limit "
-            "the search to an exact list, and include open, completed, or all items."
+            "the search to an exact list, filter by local due-date range or flag, "
+            "and page through open, completed, or all items."
         ),
         "inputSchema": {
             "type": "object",
@@ -76,10 +114,20 @@ TOOLS = [
                     "description": "Optional case-insensitive text in the title or notes.",
                 },
                 "list": LIST_SCHEMA,
+                "list_id": LIST_ID_SCHEMA,
                 "completed": {
                     "type": "string",
                     "enum": ["open", "completed", "all"],
                     "default": "open",
+                },
+                "flagged": {"type": "boolean"},
+                "due_start": LOCAL_DATE_SCHEMA,
+                "due_end": LOCAL_DATE_SCHEMA,
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10000,
+                    "default": 0,
                 },
                 "limit": {
                     "type": "integer",
@@ -122,12 +170,14 @@ TOOLS = [
                 },
                 "due": DUE_SCHEMA,
                 "list": LIST_SCHEMA,
+                "list_id": LIST_ID_SCHEMA,
                 "notes": {
                     "type": "string",
                     "maxLength": 4096,
                     "description": "Optional reminder notes.",
                 },
                 "priority": {**PRIORITY_SCHEMA, "default": "none"},
+                "flagged": {"type": "boolean", "default": False},
             },
             "required": ["title"],
             "additionalProperties": False,
@@ -141,7 +191,7 @@ TOOLS = [
         "title": "Update Apple Reminder",
         "description": (
             "Update one reminder by exact ID. Supports title, notes, priority, "
-            "due value, and moving it to an existing list. Empty notes clear them. "
+            "due value, flag, and moving it to an existing list. Empty notes clear them. "
             "Switching an existing due value between all-day and timed is rejected "
             "because Apple automation cannot do it without leaving stale date state."
         ),
@@ -156,8 +206,10 @@ TOOLS = [
                 },
                 "due": DUE_SCHEMA,
                 "list": LIST_SCHEMA,
+                "list_id": LIST_ID_SCHEMA,
                 "notes": {"type": "string", "maxLength": 4096},
                 "priority": PRIORITY_SCHEMA,
+                "flagged": {"type": "boolean"},
             },
             "required": ["id"],
             "additionalProperties": False,
@@ -240,13 +292,26 @@ def _due(value):
             return dt.date.fromisoformat(value).isoformat(), "all_day"
         except ValueError:
             raise UserError("due must be a real date in YYYY-MM-DD format")
+    return _timed_date_time(value, "due"), "timed"
+
+
+def _timed_date_time(value, field):
+    value = _text(value, field, 64, required=True)
     try:
         parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
-        raise UserError("due must be an ISO 8601 date-time")
+        raise UserError("%s must be an ISO 8601 date-time" % field)
     if parsed.tzinfo is None or parsed.utcoffset() is None:
-        raise UserError("timed due values must include an explicit UTC offset")
-    return parsed.isoformat(timespec="seconds"), "timed"
+        raise UserError("%s must include an explicit UTC offset" % field)
+    return parsed.isoformat(timespec="seconds")
+
+
+def _local_date(value, field):
+    value = _text(value, field, 10, required=True)
+    try:
+        return dt.date.fromisoformat(value).isoformat()
+    except ValueError:
+        raise UserError("%s must be a real date in YYYY-MM-DD format" % field)
 
 
 def _priority(value, default=None):
@@ -261,26 +326,93 @@ def _id(arguments):
     return _text(arguments.get("id"), "id", 1024, required=True)
 
 
+def _list_target(arguments, payload):
+    if "list" in arguments and "list_id" in arguments:
+        raise UserError("use either list or list_id, not both")
+    if "list" in arguments:
+        payload["list"] = _text(arguments["list"], "list", 256, required=True)
+    if "list_id" in arguments:
+        payload["list_id"] = _text(
+            arguments["list_id"], "list_id", 1024, required=True
+        )
+
+
+def _boolean(arguments, field, payload, *, default=None):
+    if field not in arguments:
+        if default is not None:
+            payload[field] = default
+        return
+    value = arguments[field]
+    if not isinstance(value, bool):
+        raise UserError("%s must be a boolean" % field)
+    payload[field] = value
+
+
 def normalize_arguments(name, arguments):
     if name == "list_reminder_lists":
         _arguments(arguments, set())
         return {"action": name}
 
+    if name == "create_reminder_list":
+        arguments = _arguments(arguments, {"name"})
+        return {
+            "action": name,
+            "name": _text(arguments.get("name"), "name", 256, required=True),
+        }
+
+    if name == "rename_reminder_list":
+        arguments = _arguments(arguments, {"id", "name"})
+        return {
+            "action": name,
+            "id": _id(arguments),
+            "name": _text(arguments.get("name"), "name", 256, required=True),
+        }
+
     if name == "search_reminders":
-        arguments = _arguments(arguments, {"query", "list", "completed", "limit"})
+        arguments = _arguments(
+            arguments,
+            {
+                "query",
+                "list",
+                "list_id",
+                "completed",
+                "flagged",
+                "due_start",
+                "due_end",
+                "offset",
+                "limit",
+            },
+        )
         completed = arguments.get("completed", "open")
         if completed not in {"open", "completed", "all"}:
             raise UserError("completed must be one of: open, completed, all")
         limit = arguments.get("limit", 50)
         if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
             raise UserError("limit must be an integer from 1 to 200")
-        return {
+        offset = arguments.get("offset", 0)
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or not 0 <= offset <= 10000
+        ):
+            raise UserError("offset must be an integer from 0 to 10000")
+        payload = {
             "action": name,
             "query": _text(arguments.get("query"), "query", 512),
-            "list": _text(arguments.get("list"), "list", 256),
             "completed": completed,
+            "offset": offset,
             "limit": limit,
         }
+        _list_target(arguments, payload)
+        _boolean(arguments, "flagged", payload)
+        if "due_start" in arguments:
+            payload["due_start"] = _local_date(arguments["due_start"], "due_start")
+        if "due_end" in arguments:
+            payload["due_end"] = _local_date(arguments["due_end"], "due_end")
+        if payload.get("due_start") and payload.get("due_end"):
+            if payload["due_start"] > payload["due_end"]:
+                raise UserError("due_start must be on or before due_end")
+        return payload
 
     if name in {"get_reminder", "delete_reminder"}:
         arguments = _arguments(arguments, {"id"})
@@ -288,26 +420,47 @@ def normalize_arguments(name, arguments):
 
     if name == "add_reminder":
         arguments = _arguments(
-            arguments, {"title", "due", "list", "notes", "priority"}
+            arguments,
+            {
+                "title",
+                "due",
+                "list",
+                "list_id",
+                "notes",
+                "priority",
+                "flagged",
+            },
         )
         priority, priority_label = _priority(arguments.get("priority"), "none")
         due = due_kind = None
         if "due" in arguments:
             due, due_kind = _due(arguments["due"])
-        return {
+        payload = {
             "action": name,
             "title": _text(arguments.get("title"), "title", 512, required=True),
             "due": due,
             "due_kind": due_kind,
-            "list": _text(arguments.get("list"), "list", 256),
             "notes": _text(arguments.get("notes"), "notes", 4096),
             "priority": priority,
             "priority_label": priority_label,
         }
+        _list_target(arguments, payload)
+        _boolean(arguments, "flagged", payload, default=False)
+        return payload
 
     if name == "update_reminder":
         arguments = _arguments(
-            arguments, {"id", "title", "due", "list", "notes", "priority"}
+            arguments,
+            {
+                "id",
+                "title",
+                "due",
+                "list",
+                "list_id",
+                "notes",
+                "priority",
+                "flagged",
+            },
         )
         payload = {"action": name, "id": _id(arguments)}
         if "title" in arguments:
@@ -318,16 +471,14 @@ def normalize_arguments(name, arguments):
             payload["notes"] = _text(
                 arguments["notes"], "notes", 4096, allow_empty=True
             )
-        if "list" in arguments:
-            payload["list"] = _text(
-                arguments["list"], "list", 256, required=True
-            )
+        _list_target(arguments, payload)
         if "priority" in arguments:
             payload["priority"], payload["priority_label"] = _priority(
                 arguments["priority"]
             )
         if "due" in arguments:
             payload["due"], payload["due_kind"] = _due(arguments["due"])
+        _boolean(arguments, "flagged", payload)
         if len(payload) == 2:
             raise UserError("update_reminder requires at least one field to change")
         return payload
@@ -397,6 +548,14 @@ def call_tool(params):
 
     if name == "list_reminder_lists":
         message = "Found %d reminder lists." % len(result.get("lists", []))
+    elif name == "create_reminder_list":
+        message = 'Created reminder list “%s”.' % result.get("list", {}).get(
+            "name", "Reminders"
+        )
+    elif name == "rename_reminder_list":
+        message = 'Renamed reminder list to “%s”.' % result.get("list", {}).get(
+            "name", "Reminders"
+        )
     elif name == "search_reminders":
         message = "Found %d matching reminders." % len(result.get("reminders", []))
     elif name == "get_reminder":
@@ -461,7 +620,9 @@ def handle_message(message):
                 },
                 "instructions": (
                     "Reads and manages native Apple Reminders. Use read tools to "
-                    "resolve exact IDs before updating, completing, reopening, or deleting."
+                    "resolve exact reminder and list IDs before updating, moving, "
+                    "completing, reopening, renaming, or deleting. Relative dates "
+                    "must be resolved before calling a tool."
                 ),
             },
         )

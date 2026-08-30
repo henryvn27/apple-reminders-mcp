@@ -12,6 +12,33 @@ import server  # noqa: E402
 
 
 class ServerTests(unittest.TestCase):
+    def test_bridge_distinguishes_timed_due_from_all_day_mirror(self):
+        source = (PLUGIN / "reminders.js").read_text()
+        source += r"""
+function run() {
+  const midnight = new Date("2037-12-15T05:00:00.000Z");
+  const afternoon = new Date("2037-12-15T19:00:00.000Z");
+  const timed = reminderDue({
+    dueDate: () => afternoon,
+    alldayDueDate: () => midnight,
+  });
+  const allDay = reminderDue({
+    dueDate: () => midnight,
+    alldayDueDate: () => midnight,
+  });
+  return JSON.stringify({ timed, allDay });
+}
+"""
+        completed = subprocess.run(
+            ["/usr/bin/osascript", "-l", "JavaScript", "-e", source],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["timed"]["due_kind"], "timed")
+        self.assertEqual(result["allDay"]["due_kind"], "all_day")
+
     def test_protocol_round_trip_lists_safe_lifecycle_tools(self):
         requests = "\n".join(
             [
@@ -39,12 +66,14 @@ class ServerTests(unittest.TestCase):
         )
         responses = [json.loads(line) for line in completed.stdout.splitlines()]
         self.assertEqual(responses[0]["result"]["protocolVersion"], "2025-06-18")
-        self.assertEqual(responses[0]["result"]["serverInfo"]["version"], "0.2.0")
+        self.assertEqual(responses[0]["result"]["serverInfo"]["version"], "0.3.0")
         tools = responses[1]["result"]["tools"]
         self.assertEqual(
             [tool["name"] for tool in tools],
             [
                 "list_reminder_lists",
+                "create_reminder_list",
+                "rename_reminder_list",
                 "search_reminders",
                 "get_reminder",
                 "add_reminder",
@@ -62,6 +91,7 @@ class ServerTests(unittest.TestCase):
             self.assertTrue(tools[name]["idempotentHint"])
         self.assertFalse(tools["add_reminder"]["readOnlyHint"])
         self.assertFalse(tools["add_reminder"]["idempotentHint"])
+        self.assertFalse(tools["create_reminder_list"]["idempotentHint"])
         self.assertTrue(tools["delete_reminder"]["destructiveHint"])
         self.assertFalse(tools["delete_reminder"]["idempotentHint"])
 
@@ -73,6 +103,7 @@ class ServerTests(unittest.TestCase):
                 "due": "2026-09-01T16:00:00-04:00",
                 "list": " School ",
                 "priority": "high",
+                "flagged": True,
             },
         )
         self.assertEqual(payload["action"], "add_reminder")
@@ -81,6 +112,7 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(payload["priority"], 1)
         self.assertEqual(payload["priority_label"], "high")
         self.assertEqual(payload["due_kind"], "timed")
+        self.assertTrue(payload["flagged"])
 
         all_day = server.normalize_arguments(
             "add_reminder", {"title": "Pack", "due": "2026-09-02"}
@@ -94,6 +126,10 @@ class ServerTests(unittest.TestCase):
                 "query": " goggles ",
                 "list": " School ",
                 "completed": "all",
+                "flagged": False,
+                "due_start": "2026-09-01",
+                "due_end": "2026-09-07",
+                "offset": 50,
                 "limit": 25,
             },
         )
@@ -104,12 +140,44 @@ class ServerTests(unittest.TestCase):
                 "query": "goggles",
                 "list": "School",
                 "completed": "all",
+                "flagged": False,
+                "due_start": "2026-09-01",
+                "due_end": "2026-09-07",
+                "offset": 50,
                 "limit": 25,
             },
         )
         defaults = server.normalize_arguments("search_reminders", {})
         self.assertEqual(defaults["completed"], "open")
+        self.assertEqual(defaults["offset"], 0)
         self.assertEqual(defaults["limit"], 50)
+
+    def test_list_ids_are_exact_targets_and_exclusive_with_names(self):
+        payload = server.normalize_arguments(
+            "add_reminder", {"title": "Pack", "list_id": " list-id "}
+        )
+        self.assertEqual(payload["list_id"], "list-id")
+        self.assertNotIn("list", payload)
+
+        with self.assertRaisesRegex(server.UserError, "either list or list_id"):
+            server.normalize_arguments(
+                "search_reminders", {"list": "School", "list_id": "list-id"}
+            )
+
+    def test_list_lifecycle_normalizes_exact_id_and_name(self):
+        created = server.normalize_arguments(
+            "create_reminder_list", {"name": " Projects "}
+        )
+        self.assertEqual(
+            created, {"action": "create_reminder_list", "name": "Projects"}
+        )
+        renamed = server.normalize_arguments(
+            "rename_reminder_list", {"id": " list-id ", "name": " Active "}
+        )
+        self.assertEqual(
+            renamed,
+            {"action": "rename_reminder_list", "id": "list-id", "name": "Active"},
+        )
 
     def test_update_is_sparse_and_can_clear_notes(self):
         payload = server.normalize_arguments(
@@ -119,6 +187,7 @@ class ServerTests(unittest.TestCase):
                 "notes": "  ",
                 "priority": "none",
                 "list": "Personal",
+                "flagged": True,
             },
         )
         self.assertEqual(
@@ -130,6 +199,7 @@ class ServerTests(unittest.TestCase):
                 "priority": 0,
                 "priority_label": "none",
                 "list": "Personal",
+                "flagged": True,
             },
         )
         with self.assertRaisesRegex(server.UserError, "at least one field"):
@@ -163,9 +233,20 @@ class ServerTests(unittest.TestCase):
             ),
             ("search_reminders", {"limit": True}, "integer from 1 to 200"),
             ("search_reminders", {"completed": "maybe"}, "completed must be"),
+            (
+                "search_reminders",
+                {"due_start": "2026-09-03", "due_end": "2026-09-02"},
+                "on or before",
+            ),
+            ("search_reminders", {"flagged": "yes"}, "flagged must be a boolean"),
             ("get_reminder", {"id": ""}, "id cannot be empty"),
             ("list_reminder_lists", {"query": "x"}, "unknown argument"),
             ("add_reminder", {"title": "Pack", "delete": True}, "unknown argument"),
+            (
+                "update_reminder",
+                {"id": "id-1", "remind_at": "2026-09-02T08:30:00-04:00"},
+                "unknown argument",
+            ),
         ]
         for name, arguments, message in cases:
             with self.subTest(name=name, arguments=arguments):
@@ -175,6 +256,8 @@ class ServerTests(unittest.TestCase):
     def test_call_tool_dispatches_action_and_returns_structured_content(self):
         result_by_name = {
             "list_reminder_lists": {"lists": [{"name": "Reminders"}]},
+            "create_reminder_list": {"list": {"id": "list-1", "name": "Trips"}},
+            "rename_reminder_list": {"list": {"id": "list-1", "name": "Travel"}},
             "search_reminders": {"reminders": [{"title": "Pack"}]},
             "get_reminder": {
                 "reminder": {
@@ -194,6 +277,8 @@ class ServerTests(unittest.TestCase):
         }
         arguments = {
             "list_reminder_lists": {},
+            "create_reminder_list": {"name": "Trips"},
+            "rename_reminder_list": {"id": "list-1", "name": "Travel"},
             "search_reminders": {},
             "get_reminder": {"id": "id-1"},
             "add_reminder": {"title": "Pack"},
