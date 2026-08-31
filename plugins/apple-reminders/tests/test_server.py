@@ -12,6 +12,72 @@ import server  # noqa: E402
 
 
 class ServerTests(unittest.TestCase):
+    def test_bridge_prefilters_queries_and_preserves_fallback_semantics(self):
+        source = (PLUGIN / "reminders.js").read_text()
+        source += r"""
+function fakeReminder(id, title, notes) {
+  return {
+    id: () => id,
+    name: () => title,
+    body: () => notes,
+    dueDate: () => null,
+    alldayDueDate: () => null,
+    completionDate: () => null,
+    remindMeDate: () => null,
+    creationDate: () => null,
+    modificationDate: () => null,
+    completed: () => false,
+    priority: () => 0,
+    flagged: () => false,
+  };
+}
+
+function run() {
+  const items = [
+    fakeReminder("a", "Needle in title", ""),
+    fakeReminder("b", "Unrelated", "false positive candidate"),
+    fakeReminder("c", "Other", "needle in notes"),
+  ];
+  let nativeCalls = 0;
+  const remindersFunction = () => items;
+  remindersFunction.whose = (predicate) => {
+    nativeCalls += 1;
+    if (!predicate._or) throw new Error("missing native OR predicate");
+    return () => items;
+  };
+  const list = {
+    id: () => "list-1",
+    name: () => "Fixture",
+    reminders: remindersFunction,
+  };
+  const reminders = { lists: () => [list] };
+  const input = {
+    query: "nEeDlE",
+    completed: "all",
+    offset: 0,
+    limit: 50,
+  };
+  const native = searchReminders(reminders, input);
+  remindersFunction.whose = () => {
+    throw new Error("native filtering unavailable");
+  };
+  const fallback = searchReminders(reminders, input);
+  return JSON.stringify({ native, fallback, nativeCalls });
+}
+"""
+        completed = subprocess.run(
+            ["/usr/bin/osascript", "-l", "JavaScript", "-e", source],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        result = json.loads(completed.stdout)
+        self.assertEqual(result["nativeCalls"], 1)
+        self.assertEqual(
+            [item["id"] for item in result["native"]["reminders"]], ["a", "c"]
+        )
+        self.assertEqual(result["native"], result["fallback"])
+
     def test_bridge_distinguishes_timed_due_from_all_day_mirror(self):
         source = (PLUGIN / "reminders.js").read_text()
         source += r"""
