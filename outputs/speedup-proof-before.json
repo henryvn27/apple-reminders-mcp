@@ -1,0 +1,36 @@
+{
+  "bridge_sha256": "8d8d9c6dc2d3529a1f22a44492d894860312433a799bbae424a3317917da139b",
+  "fixture": {
+    "expected_matches": 1,
+    "query": "speedproofneedle",
+    "reminders": 24
+  },
+  "fixture_cleanup": "passed",
+  "lifecycle": {
+    "add": "passed",
+    "complete": "passed",
+    "delete": "passed",
+    "reopen": "passed",
+    "update": "passed"
+  },
+  "median_seconds": null,
+  "ordered_id_digest": "e9acbc88a33b9a775f569344156c5d69254ad1bef04d25c44debbda82c85abad",
+  "p95_seconds": null,
+  "phase": "before",
+  "protocol": {
+    "completed_runs": 0,
+    "completed_warmups": 0,
+    "planned_runs": 7,
+    "planned_warmups": 2,
+    "timeout_seconds": 120
+  },
+  "result_count": null,
+  "schema_version": 1,
+  "status": "timed_out",
+  "system": {
+    "platform": "macOS-27.0-arm64-arm-64bit",
+    "python": "3.9.6"
+  },
+  "timeout_lower_bound_seconds": 120,
+  "timings_seconds": []
+}

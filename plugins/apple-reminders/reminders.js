@@ -156,6 +156,20 @@ function reminderLocalDueDate(reminder) {
   return timed ? localDate(timed) : null;
 }
 
+function reminderCandidates(list, query) {
+  if (!query) return list.reminders();
+  try {
+    return list.reminders.whose({
+      _or: [
+        { name: { _contains: query } },
+        { body: { _contains: query } },
+      ],
+    })();
+  } catch (error) {
+    return list.reminders();
+  }
+}
+
 function searchReminders(reminders, input) {
   const lists = input.list || input.list_id
     ? [selectedList(reminders, input)]
@@ -166,7 +180,7 @@ function searchReminders(reminders, input) {
   let truncated = false;
 
   outer: for (const list of lists) {
-    for (const reminder of list.reminders()) {
+    for (const reminder of reminderCandidates(list, input.query)) {
       const completed = Boolean(reminder.completed());
       if (input.completed === "open" && completed) continue;
       if (input.completed === "completed" && !completed) continue;

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "benchmark": "search_reminders rare exact-list query",
+  "baseline": {
+    "git_sha": "f70deac5a62dc4a9a53ef05bc7dc03a5fa29f836",
+    "status": "timed_out",
+    "timeout_lower_bound_seconds": 120
+  },
+  "optimized": {
+    "status": "completed",
+    "median_seconds": 25.571264,
+    "p95_seconds": 43.397707,
+    "measured_runs": 7
+  },
+  "speedup": {
+    "median_lower_bound_x": 4.69,
+    "p95_lower_bound_x": 2.76,
+    "claim": "The optimized median is more than 4.69x faster than the baseline timeout lower bound."
+  },
+  "correctness": {
+    "fixture_reminders": 24,
+    "expected_matches": 1,
+    "optimized_result_count": 1,
+    "ordered_results_checked_against_fixture_oracle": true,
+    "baseline_lifecycle": "passed",
+    "optimized_lifecycle": "passed",
+    "baseline_fixture_cleanup": "passed",
+    "optimized_fixture_cleanup": "passed"
+  }
+}
